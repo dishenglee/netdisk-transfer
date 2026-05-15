@@ -72,7 +72,9 @@ export class CrossPlatformTransferAdapter implements NetdiskTransferAdapter {
 
     // Step 1: Save shared files to own drive on source platform + get file list
     log(`[跨平台] 从 ${origin} 保存分享文件到源网盘...`);
-    const sourceFiles = await this.saveAndListSourceFiles(resource);
+    const sourceFiles = this.unwrapSingleDirectory(
+      await this.saveAndListSourceFiles(resource),
+    );
     if (sourceFiles.length === 0) {
       throw new Error("Source share is empty");
     }
@@ -398,6 +400,16 @@ export class CrossPlatformTransferAdapter implements NetdiskTransferAdapter {
         url.searchParams.get("pwd") ??
         url.hash.replace(/^#/, "").trim(),
     };
+  }
+
+  private unwrapSingleDirectory(files: SourceFileEntry[]): SourceFileEntry[] {
+    if (files.length === 0) return files;
+    const first = files[0].relativePath.split("/")[0];
+    if (!first || !files.every((f) => f.relativePath.startsWith(first + "/"))) {
+      return files;
+    }
+    const prefixLen = first.length + 1;
+    return files.map((f) => ({ ...f, relativePath: f.relativePath.slice(prefixLen) }));
   }
 
   private applyRenamePrefix(fileName: string): string {

@@ -1,14 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import QRCode from "qrcode";
-import { PNG } from "pngjs";
-import jsQRModule from "jsqr";
-
-const jsQR = (jsQRModule as any).default ?? jsQRModule;
 import { updateEnvValue } from "../quark/quark-cookie-login.js";
 
 const QRCODE_URL = "https://passport.baidu.com/v2/api/getqrcode";
-const QRCODE_IMAGE_URL = "https://passport.baidu.com/v2/api/qrcode";
 const UNICAST_URL = "https://passport.baidu.com/channel/unicast";
 const BDUSS_LOGIN_URL =
   "https://passport.baidu.com/v3/login/main/qrbdusslogin";
@@ -32,7 +27,6 @@ export interface BaiduQrLoginResult {
 
 interface QrcodeApiResponse {
   errno?: number;
-  imgurl?: string;
   sign?: string;
   channel_id?: string;
 }
@@ -52,9 +46,9 @@ export async function loginBaiduByQrCode(
   const cookies = new Map<string, string>();
 
   const qr = await getQrCode(gid, cookies);
-  const qrContent = await decodeQrImage(qr.imgurl);
+  const qrUrl = buildQrUrl(qr.channelId);
 
-  const qrText = await QRCode.toString(qrContent, {
+  const qrText = await QRCode.toString(qrUrl, {
     type: "terminal",
     small: true,
   });
@@ -106,7 +100,7 @@ export async function loginBaiduByQrCode(
 async function getQrCode(
   gid: string,
   cookies: Map<string, string>,
-): Promise<{ imgurl: string; channelId: string }> {
+): Promise<{ channelId: string }> {
   const url = new URL(QRCODE_URL);
   url.searchParams.set("lp", "pc");
   url.searchParams.set("qrloginfrom", "pc");
@@ -124,36 +118,17 @@ async function getQrCode(
   const text = await resp.text();
   const json = parseJsonpOrJson(text) as QrcodeApiResponse;
 
-  const imgurl = json.imgurl;
   const channelId = json.channel_id ?? json.sign;
-  if (!imgurl || !channelId) {
+  if (!channelId) {
     throw new Error(`获取百度二维码失败: ${JSON.stringify(json)}`);
   }
 
-  return { imgurl, channelId };
+  return { channelId };
 }
 
-async function decodeQrImage(imgurl: string): Promise<string> {
-  const imageUrl = `${QRCODE_IMAGE_URL}?sign=${encodeURIComponent(imgurl)}&lp=pc`;
-  const resp = await fetch(imageUrl, { headers: { "user-agent": UA } });
-
-  if (!resp.ok) {
-    throw new Error(`下载百度二维码图片失败: ${resp.status}`);
-  }
-
-  const buffer = Buffer.from(await resp.arrayBuffer());
-  const png = PNG.sync.read(buffer);
-  const code = jsQR(
-    new Uint8ClampedArray(png.data),
-    png.width,
-    png.height,
-  );
-
-  if (!code?.data) {
-    throw new Error("无法解码百度二维码图片");
-  }
-
-  return code.data;
+function buildQrUrl(sign: string): string {
+  const t = Math.floor(Date.now() / 1000);
+  return `https://wappass.baidu.com/wp/?qrlogin&t=${t}&error=0&sign=${sign}&cmd=login&lp=pc&tpl=netdisk&adapter=3&qrloginfrom=pc`;
 }
 
 async function pollUnicast(

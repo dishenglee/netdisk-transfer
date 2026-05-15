@@ -1,4 +1,5 @@
 import { join } from "node:path";
+import { unlink } from "node:fs/promises";
 import {
   NetdiskTransferAdapter,
   NetdiskTransferResult,
@@ -15,6 +16,13 @@ import { UcDriveClient } from "./uc/uc-drive-client.js";
 import { XunleiDriveClient } from "./xunlei/xunlei-drive-client.js";
 
 type SourcePlatform = "quark" | "baidu" | "xunlei";
+
+interface SourceFileEntry {
+  id: string;
+  name: string;
+  isDir: false;
+  relativePath: string;
+}
 
 export interface CrossPlatformTransferOptions {
   targetPlatform: string;
@@ -81,23 +89,37 @@ export class CrossPlatformTransferAdapter implements NetdiskTransferAdapter {
 
     // Step 3: Download from source + upload to UC
     const tempDir = await createTempDir();
+    let transferredCount = 0;
     try {
+      const dirFidCache = new Map<string, string>();
+      dirFidCache.set("", targetDirFid);
+
       for (const file of sourceFiles) {
-        if (file.isDir) {
-          log(`[跨平台] 跳过目录: ${file.name}`);
-          continue;
+        const parentRelDir = file.relativePath.includes("/")
+          ? file.relativePath.slice(0, file.relativePath.lastIndexOf("/"))
+          : "";
+
+        let uploadDirFid = dirFidCache.get(parentRelDir);
+        if (!uploadDirFid) {
+          const subDirPath = this.joinPath(targetPath, parentRelDir);
+          uploadDirFid = await this.ucClient.ensureDirectory(subDirPath);
+          dirFidCache.set(parentRelDir, uploadDirFid);
         }
 
-        log(`[跨平台] 下载: ${file.name}`);
-        const localPath = join(tempDir, file.name);
+        log(`[跨平台] 下载: ${file.relativePath}`);
+        const safeLocalName = file.name.replace(/[/\\]/gu, "_");
+        const localPath = join(tempDir, `${transferredCount}_${safeLocalName}`);
         const { url, headers } = await this.getSourceDownloadInfo(
           origin,
           file,
         );
         await downloadFile({ url, headers, destPath: localPath });
 
-        log(`[跨平台] 上传到UC: ${file.name}`);
-        await this.ucClient.uploadFile(localPath, file.name, targetDirFid);
+        log(`[跨平台] 上传到UC: ${file.relativePath}`);
+        await this.ucClient.uploadFile(localPath, file.name, uploadDirFid);
+        transferredCount++;
+
+        await unlink(localPath).catch(() => {});
       }
     } finally {
       await cleanupTempDir(tempDir);
@@ -135,13 +157,13 @@ export class CrossPlatformTransferAdapter implements NetdiskTransferAdapter {
       targetAccessCode: share.passcode,
       targetFileId: targetDirFid,
       targetPath,
-      message: `Cross-platform transfer: ${origin} -> ${this.options.targetPlatform}, ${sourceFiles.length} item(s)`,
+      message: `Cross-platform transfer: ${origin} -> ${this.options.targetPlatform}, ${transferredCount} file(s)`,
     };
   }
 
   private async saveAndListSourceFiles(
     resource: ResourceTransferRecord,
-  ): Promise<Array<{ id: string; name: string; isDir: boolean }>> {
+  ): Promise<SourceFileEntry[]> {
     const origin = resource.originPlatform as SourcePlatform;
     const source = this.sources.find((s) => s.platform === origin);
     if (!source) {
@@ -163,7 +185,7 @@ export class CrossPlatformTransferAdapter implements NetdiskTransferAdapter {
   private async saveAndListQuark(
     resource: ResourceTransferRecord,
     client: QuarkDriveClient,
-  ): Promise<Array<{ id: string; name: string; isDir: boolean }>> {
+  ): Promise<SourceFileEntry[]> {
     const { pwdId, passcode, pdirFid } = this.parseQuarkShareUrl(
       resource.originShareUrl!,
       resource.originAccessCode,
@@ -171,7 +193,6 @@ export class CrossPlatformTransferAdapter implements NetdiskTransferAdapter {
     const stoken = await client.getShareToken(pwdId, passcode);
     const sharedFiles = await client.listSharedFiles(pwdId, stoken, pdirFid);
 
-    // Save to a temp directory on Quark
     const tempPath = `/__cross_transfer_temp/${Date.now()}`;
     const tempFid = await client.ensureDirectory(tempPath);
 
@@ -190,17 +211,31 @@ export class CrossPlatformTransferAdapter implements NetdiskTransferAdapter {
     }
 
     const savedFiles = await client.listFiles(tempFid);
-    return savedFiles.map((f) => ({
-      id: f.fid,
-      name: f.fileName,
-      isDir: f.dir,
-    }));
+    return this.flattenQuarkFiles(client, savedFiles, "");
+  }
+
+  private async flattenQuarkFiles(
+    client: QuarkDriveClient,
+    files: Array<{ fid: string; fileName: string; dir: boolean }>,
+    prefix: string,
+  ): Promise<SourceFileEntry[]> {
+    const result: SourceFileEntry[] = [];
+    for (const f of files) {
+      const relPath = prefix ? `${prefix}/${f.fileName}` : f.fileName;
+      if (f.dir) {
+        const children = await client.listFiles(f.fid);
+        result.push(...await this.flattenQuarkFiles(client, children, relPath));
+      } else {
+        result.push({ id: f.fid, name: f.fileName, isDir: false, relativePath: relPath });
+      }
+    }
+    return result;
   }
 
   private async saveAndListBaidu(
     resource: ResourceTransferRecord,
     client: BaiduDriveClient,
-  ): Promise<Array<{ id: string; name: string; isDir: boolean }>> {
+  ): Promise<SourceFileEntry[]> {
     const bdstoken = await client.getBdstoken();
     const shareUrl = resource.originShareUrl!;
     const passcode = resource.originAccessCode;
@@ -215,17 +250,32 @@ export class CrossPlatformTransferAdapter implements NetdiskTransferAdapter {
     await client.transferSharedFiles(params, tempPath, bdstoken);
 
     const savedFiles = await client.listFiles(tempPath, bdstoken);
-    return savedFiles.map((f) => ({
-      id: f.path, // Baidu uses path as identifier for download
-      name: f.fileName,
-      isDir: f.isDir,
-    }));
+    return this.flattenBaiduFiles(client, bdstoken, savedFiles, "");
+  }
+
+  private async flattenBaiduFiles(
+    client: BaiduDriveClient,
+    bdstoken: string,
+    files: Array<{ path: string; fileName: string; isDir: boolean }>,
+    prefix: string,
+  ): Promise<SourceFileEntry[]> {
+    const result: SourceFileEntry[] = [];
+    for (const f of files) {
+      const relPath = prefix ? `${prefix}/${f.fileName}` : f.fileName;
+      if (f.isDir) {
+        const children = await client.listFiles(f.path, bdstoken);
+        result.push(...await this.flattenBaiduFiles(client, bdstoken, children, relPath));
+      } else {
+        result.push({ id: f.path, name: f.fileName, isDir: false, relativePath: relPath });
+      }
+    }
+    return result;
   }
 
   private async saveAndListXunlei(
     resource: ResourceTransferRecord,
     client: XunleiDriveClient,
-  ): Promise<Array<{ id: string; name: string; isDir: boolean }>> {
+  ): Promise<SourceFileEntry[]> {
     const { shareId, passCode } = this.parseXunleiShareUrl(
       resource.originShareUrl!,
       resource.originAccessCode,
@@ -242,11 +292,25 @@ export class CrossPlatformTransferAdapter implements NetdiskTransferAdapter {
     await client.waitTask(taskId);
 
     const savedFiles = await client.listFiles(tempDir.id);
-    return savedFiles.map((f) => ({
-      id: f.id,
-      name: f.name,
-      isDir: f.isDir,
-    }));
+    return this.flattenXunleiFiles(client, savedFiles, "");
+  }
+
+  private async flattenXunleiFiles(
+    client: XunleiDriveClient,
+    files: Array<{ id: string; name: string; isDir: boolean }>,
+    prefix: string,
+  ): Promise<SourceFileEntry[]> {
+    const result: SourceFileEntry[] = [];
+    for (const f of files) {
+      const relPath = prefix ? `${prefix}/${f.name}` : f.name;
+      if (f.isDir) {
+        const children = await client.listFiles(f.id);
+        result.push(...await this.flattenXunleiFiles(client, children, relPath));
+      } else {
+        result.push({ id: f.id, name: f.name, isDir: false, relativePath: relPath });
+      }
+    }
+    return result;
   }
 
   private async getSourceDownloadInfo(
@@ -280,8 +344,7 @@ export class CrossPlatformTransferAdapter implements NetdiskTransferAdapter {
           url,
           headers: {
             cookie: client.getCookie(),
-            "user-agent":
-              "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "user-agent": "pan.baidu.com",
           },
         };
       }

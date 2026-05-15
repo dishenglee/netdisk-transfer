@@ -15,14 +15,33 @@ export interface DownloadFileOptions {
 }
 
 export async function downloadFile(options: DownloadFileOptions): Promise<void> {
-  const resp = await fetch(options.url, {
-    headers: options.headers,
-    redirect: "follow",
-  });
+  let url = options.url;
+  let resp: Response | undefined;
 
-  if (!resp.ok) {
+  for (let i = 0; i < 10; i++) {
+    try {
+      resp = await fetch(url, {
+        headers: options.headers,
+        redirect: "manual",
+      });
+    } catch (err) {
+      const cause = err instanceof Error && "cause" in err ? (err as { cause?: unknown }).cause : undefined;
+      throw new Error(
+        `Download network error: ${err instanceof Error ? err.message : err} | cause: ${cause instanceof Error ? cause.message : cause} (${url.slice(0, 150)})`,
+      );
+    }
+    if (resp.status >= 300 && resp.status < 400) {
+      const location = resp.headers.get("location");
+      if (!location) break;
+      url = new URL(location, url).href;
+      continue;
+    }
+    break;
+  }
+
+  if (!resp || !resp.ok) {
     throw new Error(
-      `Download failed: ${resp.status} ${resp.statusText} (${options.url.slice(0, 80)})`,
+      `Download failed: ${resp?.status} ${resp?.statusText} (${url.slice(0, 120)})`,
     );
   }
 

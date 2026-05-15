@@ -65,20 +65,8 @@ export class BaiduDriveApiClient implements BaiduDriveClient {
     return this.cookie;
   }
 
-  async getDownloadUrl(path: string, bdstoken: string): Promise<string> {
-    const url = this.createUrl("/api/filemetas", {
-      target: JSON.stringify([path]),
-      dlink: "1",
-      bdstoken,
-      web: "5",
-      origin: "dlna",
-    });
-    const json = await this.requestJson<{ info?: Array<{ dlink?: string }> }>(url);
-    const dlink = json.info?.[0]?.dlink;
-    if (!dlink) {
-      throw new Error(`Baidu file ${path} has no download link`);
-    }
-    return dlink.replace(/\\u0026/gu, "&");
+  async getDownloadUrl(path: string, _bdstoken: string): Promise<string> {
+    return `https://pcs.baidu.com/rest/2.0/pcs/file?method=download&path=${encodeURIComponent(path)}&app_id=250528`;
   }
 
   async getBdstoken(): Promise<string> {

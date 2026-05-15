@@ -1,14 +1,16 @@
+import { randomBytes } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import QRCode from "qrcode";
 import { updateEnvValue } from "../quark/quark-cookie-login.js";
 
 const AUTH_URL = "https://xluser-ssl.xunlei.com/v1";
-const DEFAULT_CLIENT_ID = "Xqp0kJBXWhwaTpB6";
-const DEFAULT_CLIENT_SECRET = "Xp6vsy4tN9toTVdMSpomVdXpRmES";
+const CLIENT_ID = "Xqp0kJBXWhwaTpB6";
+// 注意: 此 client_id 是 public client，token 请求不能带 client_secret
+const CLIENT_VERSION = "1.92.42";
+const QR_LOGIN_PAGE = "https://i.xunlei.com/center/account/personal/qrcode-login/";
+const SDK_VERSION = "9.1.2";
 
 export interface XunleiQrLoginOptions {
-  clientId?: string;
-  clientSecret?: string;
   writeEnv?: boolean;
   envPath?: string;
   silent?: boolean;
@@ -46,25 +48,51 @@ interface TokenResponse {
   error_description?: string;
 }
 
+function generateDeviceId(): string {
+  return randomBytes(16).toString("hex");
+}
+
+
+function buildHeaders(deviceId: string): Record<string, string> {
+  return {
+    "content-type": "application/json",
+    "user-agent":
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36",
+    "origin": "https://pan.xunlei.com",
+    "referer": "https://pan.xunlei.com/",
+    "x-client-id": CLIENT_ID,
+    "x-client-version": CLIENT_VERSION,
+    "x-device-id": deviceId,
+    "x-device-name": "PC-Chrome",
+    "x-sdk-version": SDK_VERSION,
+    "x-protocol-version": "301",
+  };
+}
+
 export async function loginXunleiByQrCode(
   options: XunleiQrLoginOptions = {},
 ): Promise<XunleiQrLoginResult> {
-  const clientId = options.clientId ?? DEFAULT_CLIENT_ID;
-  const clientSecret = options.clientSecret ?? DEFAULT_CLIENT_SECRET;
   const log = options.silent ? () => {} : console.log.bind(console);
+  const deviceId = generateDeviceId();
+  const headers = buildHeaders(deviceId);
 
-  const device = await requestDeviceCode(clientId);
+  const device = await requestDeviceCode(headers);
 
   if (!device.device_code) {
     throw new Error(`获取设备码失败: ${device.error_description ?? "unknown"}`);
   }
 
-  const qrUrl = device.short_uri_complete ?? device.verification_uri_complete ?? device.verification_url;
-  if (!qrUrl) {
-    throw new Error("获取二维码链接失败");
+  // 用 i.xunlei.com 的二维码登录页构造扫码 URL（原始 verification_url 页面已下线）
+  const userCode = device.user_code;
+  if (!userCode) {
+    throw new Error("获取二维码链接失败: 缺少 user_code");
   }
+  const qrUrl = `${QR_LOGIN_PAGE}?client_id=${CLIENT_ID}&scope=profile%20offline%20pan%20user%20sso%20sync&user_code=${encodeURIComponent(userCode)}`;
 
-  const qrText = await QRCode.toString(qrUrl, { type: "terminal", small: true });
+  const qrText = await QRCode.toString(qrUrl, {
+    type: "terminal",
+    small: true,
+  });
   log(qrText);
   log("请使用迅雷APP扫描上方二维码登录");
 
@@ -77,7 +105,7 @@ export async function loginXunleiByQrCode(
   while (Date.now() - startedAt < expiresIn * 1000) {
     await sleep(interval);
 
-    const result = await pollToken(clientId, clientSecret, device.device_code);
+    const result = await pollToken(headers, device.device_code);
 
     if (result.access_token && result.refresh_token) {
       tokenResp = result;
@@ -122,27 +150,27 @@ export async function loginXunleiByQrCode(
   return result;
 }
 
-async function requestDeviceCode(clientId: string): Promise<DeviceCodeResponse> {
+async function requestDeviceCode(
+  headers: Record<string, string>,
+): Promise<DeviceCodeResponse> {
   const resp = await fetch(`${AUTH_URL}/auth/device/code`, {
     method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ client_id: clientId }),
+    headers,
+    body: JSON.stringify({ scope: "", client_id: CLIENT_ID }),
   });
 
   return (await resp.json()) as DeviceCodeResponse;
 }
 
 async function pollToken(
-  clientId: string,
-  clientSecret: string,
+  headers: Record<string, string>,
   deviceCode: string,
 ): Promise<TokenResponse> {
   const resp = await fetch(`${AUTH_URL}/auth/token`, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers,
     body: JSON.stringify({
-      client_id: clientId,
-      client_secret: clientSecret,
+      client_id: CLIENT_ID,
       grant_type: "urn:ietf:params:oauth:grant-type:device_code",
       device_code: deviceCode,
     }),

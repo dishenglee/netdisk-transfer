@@ -15,7 +15,7 @@ export interface QuarkTransferSettings {
 const DEFAULT_QUARK_TASK_POLL_INTERVAL_MS = 1000;
 const DEFAULT_QUARK_TASK_MAX_ATTEMPTS = 60;
 const DEFAULT_QUARK_RENAME_PREFIX = "【公众号：涤生AGI】";
-const DEFAULT_QUARK_SHARE_EXPIRED_TYPE = 1;
+const DEFAULT_QUARK_SHARE_EXPIRED_TYPE = 4;
 
 export const resolveQuarkTransferSettings = (
   config: QuarkTransferConfig,

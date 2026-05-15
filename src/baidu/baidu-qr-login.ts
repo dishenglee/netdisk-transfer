@@ -72,8 +72,8 @@ export async function loginBaiduByQrCode(
   }
 
   log("扫码成功，正在获取 Cookie...");
-  await exchangeBdussForCookies(bdussValue, gid, cookies);
-  await visitPanPage(cookies);
+  await exchangeBdussForCookies(bdussValue, gid, cookies, log);
+  await visitPanPage(cookies, log);
 
   const cookie = formatCookieString(cookies);
   if (!cookie || !cookies.has("BDUSS")) {
@@ -185,6 +185,7 @@ async function exchangeBdussForCookies(
   bdussValue: string,
   gid: string,
   cookies: Map<string, string>,
+  log: (...args: unknown[]) => void = () => {},
 ): Promise<void> {
   const url = new URL(BDUSS_LOGIN_URL);
   url.searchParams.set("v", String(Date.now()));
@@ -197,46 +198,63 @@ async function exchangeBdussForCookies(
   url.searchParams.set("tt", String(Date.now()));
   url.searchParams.set("gid", gid);
 
-  await followRedirects(url.toString(), cookies);
+  await followRedirects(url.toString(), cookies, log);
 }
 
-async function visitPanPage(cookies: Map<string, string>): Promise<void> {
-  const url = new URL("https://pan.baidu.com/api/gettemplatevariable");
-  url.searchParams.set("clienttype", "0");
-  url.searchParams.set("app_id", "38824127");
-  url.searchParams.set("web", "1");
-  url.searchParams.set(
-    "fields",
-    '["bdstoken","token","uk","isdocuser","servertime"]',
-  );
-
-  const resp: Response = await fetch(url, {
-    headers: {
-      "user-agent": UA,
-      cookie: formatCookieString(cookies),
-      referer: PAN_URL,
-    },
-  });
-  collectCookies(resp, cookies);
+async function visitPanPage(
+  cookies: Map<string, string>,
+  log: (...args: unknown[]) => void = () => {},
+): Promise<void> {
+  // 必须访问 HTML 页面并跟踪认证重定向链，
+  // 这样才能获得 PANPSC 等会话 cookie，/api/ 端点需要它们
+  await followRedirects(PAN_URL, cookies, log);
 }
 
 async function followRedirects(
   startUrl: string,
   cookies: Map<string, string>,
+  log: (...args: unknown[]) => void = () => {},
 ): Promise<void> {
   let currentUrl: string | null = startUrl;
 
   for (let i = 0; i < 15 && currentUrl; i++) {
-    const resp: Response = await fetch(currentUrl, {
-      redirect: "manual",
-      headers: {
-        "user-agent": UA,
-        cookie: formatCookieString(cookies),
-      },
-    });
+    const hostname = new URL(currentUrl).hostname;
+    let resp: Response;
+    try {
+      resp = await fetch(currentUrl, {
+        redirect: "manual",
+        headers: {
+          "user-agent": UA,
+          cookie: formatCookieString(cookies),
+        },
+      });
+    } catch (err: unknown) {
+      log(`[redirect ${i + 1}] ${hostname} -> fetch failed, retrying...`);
+      try {
+        await new Promise((r) => setTimeout(r, 1000));
+        resp = await fetch(currentUrl, {
+          redirect: "manual",
+          headers: {
+            "user-agent": UA,
+            cookie: formatCookieString(cookies),
+          },
+        });
+      } catch (retryErr: unknown) {
+        const msg =
+          retryErr instanceof Error ? retryErr.message : String(retryErr);
+        throw new Error(
+          `重定向第${i + 1}步 fetch 失败 (${hostname}): ${msg}`,
+        );
+      }
+    }
+    const prevSize = cookies.size;
     collectCookies(resp, cookies);
+    const newCookies = cookies.size - prevSize;
+    // 必须消费 body 避免连接池泄漏
+    await resp.text().catch(() => {});
 
     const location: string | null = resp.headers.get("location");
+    log(`[redirect ${i + 1}] ${hostname} ${resp.status}${newCookies > 0 ? ` +${newCookies} cookies` : ""}${location ? " -> " + new URL(location, currentUrl).hostname : ""}`);
     if (location && resp.status >= 300 && resp.status < 400) {
       currentUrl = new URL(location, currentUrl).toString();
     } else {

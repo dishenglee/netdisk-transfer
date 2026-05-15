@@ -97,7 +97,7 @@ async function main() {
     if (result.targetShareUrl) {
       console.log(`  分享链接: ${result.targetShareUrl}`);
     }
-    if (result.targetAccessCode) {
+    if (result.targetAccessCode && !result.targetShareUrl?.includes(result.targetAccessCode)) {
       console.log(`  提取码: ${result.targetAccessCode}`);
     }
     if (result.targetPath) {

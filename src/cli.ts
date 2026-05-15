@@ -99,7 +99,7 @@ async function main() {
   }
 
   const parsed = parseShareUrl(shareUrl);
-  const accessCode = accessCodeArg ?? parsed.accessCode ?? null;
+  const accessCode = accessCodeArg || parsed.accessCode || null;
 
   const id = nextId++;
   records.set(id, {
@@ -145,7 +145,7 @@ async function main() {
     }
     console.log(`  消息: ${result.message}`);
   } catch (error) {
-    console.error("转存失败:", error instanceof Error ? error.message : error);
+    console.error("转存失败:", error instanceof Error ? error.stack ?? error.message : error);
     process.exit(1);
   }
 }

@@ -223,7 +223,7 @@ export class XunleiDriveApiClient implements XunleiDriveClient {
     );
     if (json.share_status && json.share_status !== "OK") {
       throw new Error(
-        json.share_status_text ?? `Xunlei share status is ${json.share_status}`,
+        json.share_status_text || `Xunlei share status is ${json.share_status}`,
       );
     }
 

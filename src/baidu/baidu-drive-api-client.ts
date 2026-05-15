@@ -61,6 +61,26 @@ export class BaiduDriveApiClient implements BaiduDriveClient {
     this.fetchFn = options.fetchFn ?? fetch;
   }
 
+  getCookie(): string {
+    return this.cookie;
+  }
+
+  async getDownloadUrl(path: string, bdstoken: string): Promise<string> {
+    const url = this.createUrl("/api/filemetas", {
+      target: JSON.stringify([path]),
+      dlink: "1",
+      bdstoken,
+      web: "5",
+      origin: "dlna",
+    });
+    const json = await this.requestJson<{ info?: Array<{ dlink?: string }> }>(url);
+    const dlink = json.info?.[0]?.dlink;
+    if (!dlink) {
+      throw new Error(`Baidu file ${path} has no download link`);
+    }
+    return dlink.replace(/\\u0026/gu, "&");
+  }
+
   async getBdstoken(): Promise<string> {
     const url = this.createUrl("/api/gettemplatevariable", {
       clienttype: "0",

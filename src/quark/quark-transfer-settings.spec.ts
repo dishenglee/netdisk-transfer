@@ -12,7 +12,7 @@ class FakeConfig {
 const runDefaultPermanentExpiryCase = (): void => {
   const settings = resolveQuarkTransferSettings(new FakeConfig({}), "/公众号软件");
 
-  assert.equal(settings.shareExpiredType, 1);
+  assert.equal(settings.shareExpiredType, 4);
 };
 
 const runEnvOverrideCase = (): void => {

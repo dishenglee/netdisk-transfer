@@ -1,3 +1,4 @@
+import { CrossPlatformTransferAdapter } from "./cross-platform-transfer.adapter.js";
 import { ExternalCommandNetdiskTransferAdapter } from "./external-command-netdisk-transfer.adapter.js";
 import { BaiduDriveApiClient } from "./baidu/baidu-drive-api-client.js";
 import { BaiduTransferAdapter } from "./baidu/baidu-transfer.adapter.js";
@@ -45,6 +46,7 @@ export class TransferService {
     );
 
     this.runner = new ResourceTransferRunner(repository, [
+      ...this.createCrossPlatformAdapters(config, targetRoot),
       ...this.createQuarkAdapters(config, targetRoot),
       ...this.createBaiduAdapters(config, targetRoot, timeoutMs),
       ...this.createUcAdapters(config, targetRoot),
@@ -218,6 +220,98 @@ export class TransferService {
     }
 
     return adapters;
+  }
+
+  private createCrossPlatformAdapters(
+    config: TransferServiceConfig,
+    targetRoot: string,
+  ): NetdiskTransferAdapter[] {
+    const ucCookie = config.get<string>("NETDISK_TRANSFER_UC_COOKIE");
+    if (!ucCookie) return [];
+
+    const ucSettings = resolveUcTransferSettings(config, targetRoot);
+    const ucClient = new UcDriveApiClient({
+      cookie: ucCookie,
+      taskPollIntervalMs: ucSettings.taskPollIntervalMs,
+      taskMaxAttempts: ucSettings.taskMaxAttempts,
+    });
+
+    const sources: Array<{
+      platform: "quark" | "baidu" | "xunlei";
+      quarkClient?: InstanceType<typeof QuarkDriveApiClient>;
+      baiduClient?: InstanceType<typeof BaiduDriveApiClient>;
+      xunleiClient?: InstanceType<typeof XunleiDriveApiClient>;
+    }> = [];
+
+    const quarkCookie = config.get<string>("NETDISK_TRANSFER_QUARK_COOKIE");
+    if (quarkCookie) {
+      const settings = resolveQuarkTransferSettings(config, targetRoot);
+      sources.push({
+        platform: "quark",
+        quarkClient: new QuarkDriveApiClient({
+          cookie: quarkCookie,
+          taskPollIntervalMs: settings.taskPollIntervalMs,
+          taskMaxAttempts: settings.taskMaxAttempts,
+        }),
+      });
+    }
+
+    const baiduCookie = config.get<string>("NETDISK_TRANSFER_BAIDU_COOKIE");
+    if (baiduCookie) {
+      sources.push({
+        platform: "baidu",
+        baiduClient: new BaiduDriveApiClient({ cookie: baiduCookie }),
+      });
+    }
+
+    const xunleiRefreshToken = config.get<string>(
+      "NETDISK_TRANSFER_XUNLEI_REFRESH_TOKEN",
+    );
+    if (xunleiRefreshToken) {
+      const settings = resolveXunleiTransferSettings(config, targetRoot);
+      sources.push({
+        platform: "xunlei",
+        xunleiClient: new XunleiDriveApiClient({
+          refreshToken: xunleiRefreshToken,
+          accessToken: config.get<string>(
+            "NETDISK_TRANSFER_XUNLEI_ACCESS_TOKEN",
+          ),
+          accessTokenExpiresAt: parseExpiresAt(
+            config.get<string>(
+              "NETDISK_TRANSFER_XUNLEI_ACCESS_TOKEN_EXPIRES_AT",
+            ),
+          ),
+          captchaToken: config.get<string>(
+            "NETDISK_TRANSFER_XUNLEI_CAPTCHA_TOKEN",
+          ),
+          captchaTokenExpiresAt: parseExpiresAt(
+            config.get<string>(
+              "NETDISK_TRANSFER_XUNLEI_CAPTCHA_TOKEN_EXPIRES_AT",
+            ),
+          ),
+          clientId: settings.clientId,
+          deviceId: settings.deviceId,
+          captchaAction: settings.captchaAction,
+          taskPollIntervalMs: settings.taskPollIntervalMs,
+          taskMaxAttempts: settings.taskMaxAttempts,
+          onRefreshToken: (token) =>
+            persistXunleiRefreshToken(config, token),
+        }),
+      });
+    }
+
+    if (sources.length === 0) return [];
+
+    return [
+      new CrossPlatformTransferAdapter(sources, ucClient, {
+        targetPlatform: "uc",
+        targetRoot: ucSettings.targetRoot,
+        shareUrlType: ucSettings.shareUrlType,
+        shareExpiredType: ucSettings.shareExpiredType,
+        sharePasscode: ucSettings.sharePasscode,
+        renamePrefix: ucSettings.renamePrefix,
+      }),
+    ];
   }
 }
 

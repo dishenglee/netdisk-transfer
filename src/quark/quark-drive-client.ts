@@ -31,7 +31,14 @@ export interface QuarkShareOptions {
   passcode?: string;
 }
 
+export interface QuarkDownloadInfo {
+  fid: string;
+  downloadUrl: string;
+}
+
 export interface QuarkDriveClient {
+  getDownloadUrl(fids: string[]): Promise<QuarkDownloadInfo[]>;
+  getCookie(): string;
   getShareToken(pwdId: string, passcode: string): Promise<string>;
   listSharedFiles(
     pwdId: string,

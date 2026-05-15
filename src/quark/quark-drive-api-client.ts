@@ -1,4 +1,5 @@
 import {
+  QuarkDownloadInfo,
   QuarkDriveClient,
   QuarkDriveFile,
   QuarkSaveSharedFilesInput,
@@ -81,8 +82,32 @@ interface QuarkSubmitShareData {
   passcode?: string;
 }
 
+interface QuarkDownloadData {
+  download_url?: string;
+  fid?: string;
+}
+
 export class QuarkDriveApiClient implements QuarkDriveClient {
   constructor(private readonly options: QuarkDriveApiClientOptions) {}
+
+  getCookie(): string {
+    return this.options.cookie;
+  }
+
+  async getDownloadUrl(fids: string[]): Promise<QuarkDownloadInfo[]> {
+    const response = await this.request<QuarkDownloadData[]>(
+      "POST",
+      "/1/clouddrive/file/download",
+      { searchParams: this.createBaseParams(), body: { fids } },
+    );
+    const list = response.data ?? [];
+    return list
+      .filter((item) => item.download_url && item.fid)
+      .map((item) => ({
+        fid: item.fid!,
+        downloadUrl: item.download_url!,
+      }));
+  }
 
   async getShareToken(pwdId: string, passcode: string): Promise<string> {
     const response = await this.request<QuarkShareTokenData>(

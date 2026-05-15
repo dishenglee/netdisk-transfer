@@ -19,6 +19,11 @@ export interface BaiduShareOptions {
 }
 
 export interface BaiduDriveClient {
+  getDownloadUrl(
+    path: string,
+    bdstoken: string,
+  ): Promise<string>;
+  getCookie(): string;
   getBdstoken(): Promise<string>;
   ensureDirectory(path: string, bdstoken: string): Promise<BaiduDriveFile>;
   listFiles(path: string, bdstoken: string): Promise<BaiduDriveFile[]>;

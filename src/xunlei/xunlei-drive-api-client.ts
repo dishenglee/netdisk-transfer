@@ -190,6 +190,19 @@ export class XunleiDriveApiClient implements XunleiDriveClient {
     }
   }
 
+  async getDownloadUrl(fileId: string): Promise<string> {
+    const json = await this.requestPan<XunleiFileData>(
+      "GET",
+      `/drive/v1/files/${encodeURIComponent(fileId)}`,
+      {},
+    );
+    const url = (json as Record<string, unknown>).web_content_link as string | undefined;
+    if (!url) {
+      throw new Error(`Xunlei file ${fileId} has no download URL`);
+    }
+    return url;
+  }
+
   async getShareDetail(
     shareId: string,
     passCode: string,

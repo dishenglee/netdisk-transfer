@@ -45,23 +45,58 @@ function parseShareUrl(url: string): { platform: string; shareUrl: string; acces
   throw new Error(`Unsupported share URL: ${url}`);
 }
 
+function parseCliArgs(args: string[]): {
+  shareUrl: string;
+  accessCode: string | null;
+  resourceName: string;
+  targetPlatform: string | null;
+} {
+  let targetPlatform: string | null = null;
+  const positional: string[] = [];
+
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === "--target" || args[i] === "-t") {
+      targetPlatform = args[i + 1] ?? null;
+      i++; // skip next arg
+    } else {
+      positional.push(args[i]);
+    }
+  }
+
+  return {
+    shareUrl: positional[0] ?? "",
+    accessCode: positional[1] ?? null,
+    resourceName: positional[2] ?? "cli-transfer",
+    targetPlatform,
+  };
+}
+
 async function main() {
   const args = process.argv.slice(2);
   if (args.length === 0) {
-    console.log("用法: npx tsx src/cli.ts <分享链接> [提取码] [资源名称]");
+    console.log("用法: npx tsx src/cli.ts <分享链接> [提取码] [资源名称] [--target 目标平台]");
     console.log("");
-    console.log("支持平台: 夸克、百度、UC、迅雷");
-    console.log("示例:");
+    console.log("支持平台: 夸克(quark)、百度(baidu)、UC(uc)、迅雷(xunlei)");
+    console.log("");
+    console.log("同平台转存:");
     console.log("  npx tsx src/cli.ts https://pan.quark.cn/s/xxxxx");
     console.log("  npx tsx src/cli.ts https://pan.baidu.com/s/xxxxx abcd");
     console.log("  npx tsx src/cli.ts https://drive.uc.cn/s/xxxxx");
     console.log('  npx tsx src/cli.ts "https://pan.xunlei.com/s/xxxxx?pwd=xxxx"');
+    console.log("");
+    console.log("跨平台转存 (转到UC网盘):");
+    console.log("  npx tsx src/cli.ts https://pan.quark.cn/s/xxxxx --target uc");
+    console.log("  npx tsx src/cli.ts https://pan.baidu.com/s/xxxxx abcd --target uc");
+    console.log('  npx tsx src/cli.ts "https://pan.xunlei.com/s/xxxxx?pwd=xxxx" --target uc');
     process.exit(0);
   }
 
-  const shareUrl = args[0];
-  const accessCodeArg = args[1];
-  const resourceName = args[2] ?? "cli-transfer";
+  const { shareUrl, accessCode: accessCodeArg, resourceName, targetPlatform } = parseCliArgs(args);
+
+  if (!shareUrl) {
+    console.error("错误: 缺少分享链接");
+    process.exit(1);
+  }
 
   const parsed = parseShareUrl(shareUrl);
   const accessCode = accessCodeArg ?? parsed.accessCode ?? null;
@@ -74,7 +109,7 @@ async function main() {
     originPlatform: parsed.platform,
     originShareUrl: parsed.shareUrl,
     originAccessCode: accessCode,
-    targetPlatform: null,
+    targetPlatform: targetPlatform,
     targetShareUrl: null,
     targetAccessCode: null,
     targetFileId: null,
@@ -88,7 +123,12 @@ async function main() {
     repository: inMemoryRepository,
   });
 
-  console.log(`开始转存: ${parsed.platform} -> ${shareUrl}`);
+  const isCross = targetPlatform && targetPlatform !== parsed.platform;
+  console.log(
+    isCross
+      ? `开始跨平台转存: ${parsed.platform} -> ${targetPlatform}`
+      : `开始转存: ${parsed.platform} -> ${shareUrl}`,
+  );
 
   try {
     const result = await service.transferResource(String(id));

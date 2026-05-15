@@ -31,7 +31,19 @@ export interface UcShareOptions {
   passcode?: string;
 }
 
+export interface UcDownloadInfo {
+  fid: string;
+  downloadUrl: string;
+}
+
 export interface UcDriveClient {
+  getDownloadUrl(fids: string[]): Promise<UcDownloadInfo[]>;
+  getCookie(): string;
+  uploadFile(
+    localPath: string,
+    fileName: string,
+    pdirFid: string,
+  ): Promise<string>;
   getShareTokenAndFiles(
     pwdId: string,
     passcode: string,

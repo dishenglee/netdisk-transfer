@@ -1,10 +1,17 @@
+import { createHash } from "node:crypto";
+import { createReadStream } from "node:fs";
+import { stat } from "node:fs/promises";
+
+
 import {
+  UcDownloadInfo,
   UcDriveClient,
   UcDriveFile,
   UcSaveSharedFilesInput,
   UcShareOptions,
   UcSharedFile,
 } from "./uc-drive-client.js";
+import { computeFileHashes, getFileSize } from "../common/file-transfer-utils.js";
 
 const UC_PC_BASE_URL = "https://pc-api.uc.cn";
 const DEFAULT_USER_AGENT =
@@ -81,8 +88,318 @@ interface UcSubmitShareData {
   passcode?: string;
 }
 
+interface UcDownloadData {
+  download_url?: string;
+  fid?: string;
+}
+
+interface UcUpPreData {
+  task_id?: string;
+  finish?: boolean;
+  upload_id?: string;
+  obj_key?: string;
+  upload_url?: string;
+  fid?: string;
+  bucket?: string;
+  callback?: { callbackUrl?: string; callbackBody?: string };
+  format_type?: string;
+  size?: number;
+  auth_info?: string;
+}
+
+interface UcUpPreMetadata {
+  part_thread?: number;
+  part_size?: number;
+}
+
+interface UcHashData {
+  finish?: boolean;
+  fid?: string;
+}
+
+interface UcUpAuthData {
+  auth_key?: string;
+}
+
+const OSS_USER_AGENT =
+  "aliyun-sdk-js/6.6.1 Chrome 98.0.4758.80 on Windows 10 64-bit";
+
 export class UcDriveApiClient implements UcDriveClient {
   constructor(private readonly options: UcDriveApiClientOptions) {}
+
+  getCookie(): string {
+    return this.options.cookie;
+  }
+
+  async getDownloadUrl(fids: string[]): Promise<UcDownloadInfo[]> {
+    const response = await this.request<UcDownloadData[]>(
+      "POST",
+      "/1/clouddrive/file/download",
+      { searchParams: this.createBaseParams() },
+      { fids },
+    );
+    const list = response.data ?? [];
+    return list
+      .filter((item) => item.download_url && item.fid)
+      .map((item) => ({
+        fid: item.fid!,
+        downloadUrl: item.download_url!,
+      }));
+  }
+
+  async uploadFile(
+    localPath: string,
+    fileName: string,
+    pdirFid: string,
+  ): Promise<string> {
+    const fileSize = await getFileSize(localPath);
+    const { md5, sha1 } = await computeFileHashes(localPath);
+    const mimeType = this.guessMimeType(fileName);
+
+    // Step 1: pre-upload
+    const pre = await this.upPre(fileName, fileSize, mimeType, pdirFid);
+    if (pre.data?.finish) {
+      return pre.data.fid ?? "";
+    }
+
+    const taskId = pre.data?.task_id;
+    if (!taskId || !pre.data?.upload_id || !pre.data?.obj_key) {
+      throw new Error("UC upload pre response missing required fields");
+    }
+
+    // Step 2: hash check (秒传)
+    const hashResp = await this.upHash(md5, sha1, taskId);
+    if (hashResp.data?.finish) {
+      return hashResp.data.fid ?? pre.data.fid ?? "";
+    }
+
+    // Step 3: multipart upload
+    const partSize = pre.metadata?.part_size ?? 10 * 1024 * 1024; // default 10MB
+    const partCount = Math.ceil(fileSize / partSize);
+    const etags: string[] = [];
+
+    for (let i = 0; i < partCount; i++) {
+      const start = i * partSize;
+      const end = Math.min(start + partSize, fileSize);
+      const partNumber = i + 1;
+
+      const etag = await this.upPart(pre, mimeType, partNumber, localPath, start, end);
+      etags.push(etag);
+    }
+
+    // Step 4: commit
+    await this.upCommit(pre, etags);
+
+    // Step 5: finish
+    await this.upFinish(pre);
+
+    return pre.data.fid ?? "";
+  }
+
+  private async upPre(
+    fileName: string,
+    fileSize: number,
+    mimeType: string,
+    pdirFid: string,
+  ): Promise<UcEnvelope<UcUpPreData> & { metadata?: UcUpPreMetadata }> {
+    const now = Date.now();
+    return this.request<UcUpPreData>(
+      "POST",
+      "/1/clouddrive/file/upload/pre",
+      { searchParams: this.createBaseParams() },
+      {
+        ccp_hash_update: true,
+        dir_name: "",
+        file_name: fileName,
+        format_type: mimeType,
+        l_created_at: now,
+        l_updated_at: now,
+        pdir_fid: pdirFid,
+        size: fileSize,
+      },
+    ) as Promise<UcEnvelope<UcUpPreData> & { metadata?: UcUpPreMetadata }>;
+  }
+
+  private async upHash(
+    md5: string,
+    sha1: string,
+    taskId: string,
+  ): Promise<UcEnvelope<UcHashData>> {
+    return this.request<UcHashData>(
+      "POST",
+      "/1/clouddrive/file/update/hash",
+      { searchParams: this.createBaseParams() },
+      { md5, sha1, task_id: taskId },
+    );
+  }
+
+  private async upPart(
+    pre: UcEnvelope<UcUpPreData> & { metadata?: UcUpPreMetadata },
+    mimeType: string,
+    partNumber: number,
+    localPath: string,
+    start: number,
+    end: number,
+  ): Promise<string> {
+    const timeStr = new Date().toUTCString();
+    const authMeta = [
+      "PUT",
+      "",
+      mimeType,
+      timeStr,
+      `x-oss-date:${timeStr}`,
+      `x-oss-user-agent:${OSS_USER_AGENT}`,
+      `/${pre.data!.bucket}/${pre.data!.obj_key}?partNumber=${partNumber}&uploadId=${pre.data!.upload_id}`,
+    ].join("\n");
+
+    const authResp = await this.request<UcUpAuthData>(
+      "POST",
+      "/1/clouddrive/file/upload/auth",
+      { searchParams: this.createBaseParams() },
+      {
+        auth_info: pre.data!.auth_info,
+        auth_meta: authMeta,
+        task_id: pre.data!.task_id,
+      },
+    );
+
+    const authKey = authResp.data?.auth_key;
+    if (!authKey) {
+      throw new Error("UC upload auth response missing auth_key");
+    }
+
+    // Read the chunk
+    const chunkSize = end - start;
+    const { readFileChunk } = await import("../common/file-transfer-utils.js");
+    const chunk = new Uint8Array(await readFileChunk(localPath, start, chunkSize));
+
+    // Upload to OSS
+    const ossUrl = `https://${pre.data!.bucket}.${pre.data!.upload_url!.slice(7)}/${pre.data!.obj_key}`;
+    const ossResp = await fetch(ossUrl + `?partNumber=${partNumber}&uploadId=${pre.data!.upload_id}`, {
+      method: "PUT",
+      headers: {
+        Authorization: authKey,
+        "Content-Type": mimeType,
+        Referer: "https://drive.uc.cn/",
+        "x-oss-date": timeStr,
+        "x-oss-user-agent": OSS_USER_AGENT,
+      },
+      body: chunk,
+    });
+
+    if (!ossResp.ok) {
+      const text = await ossResp.text();
+      throw new Error(`UC OSS upload failed: ${ossResp.status} ${text.slice(0, 200)}`);
+    }
+
+    return ossResp.headers.get("Etag") ?? "";
+  }
+
+  private async upCommit(
+    pre: UcEnvelope<UcUpPreData> & { metadata?: UcUpPreMetadata },
+    etags: string[],
+  ): Promise<void> {
+    const timeStr = new Date().toUTCString();
+
+    // Build CompleteMultipartUpload XML
+    const parts = etags.map(
+      (etag, i) =>
+        `<Part>\n<PartNumber>${i + 1}</PartNumber>\n<ETag>${etag}</ETag>\n</Part>`,
+    );
+    const xml = `<?xml version="1.0" encoding="UTF-8"?>\n<CompleteMultipartUpload>\n${parts.join("\n")}\n</CompleteMultipartUpload>`;
+
+    const contentMd5 = createHash("md5").update(xml).digest("base64");
+    const callbackBytes = JSON.stringify(pre.data!.callback);
+    const callbackBase64 = Buffer.from(callbackBytes).toString("base64");
+
+    const authMeta = [
+      "POST",
+      contentMd5,
+      "application/xml",
+      timeStr,
+      `x-oss-callback:${callbackBase64}`,
+      `x-oss-date:${timeStr}`,
+      `x-oss-user-agent:${OSS_USER_AGENT}`,
+      `/${pre.data!.bucket}/${pre.data!.obj_key}?uploadId=${pre.data!.upload_id}`,
+    ].join("\n");
+
+    const authResp = await this.request<UcUpAuthData>(
+      "POST",
+      "/1/clouddrive/file/upload/auth",
+      { searchParams: this.createBaseParams() },
+      {
+        auth_info: pre.data!.auth_info,
+        auth_meta: authMeta,
+        task_id: pre.data!.task_id,
+      },
+    );
+
+    const authKey = authResp.data?.auth_key;
+    if (!authKey) {
+      throw new Error("UC upload commit auth failed");
+    }
+
+    const ossUrl = `https://${pre.data!.bucket}.${pre.data!.upload_url!.slice(7)}/${pre.data!.obj_key}`;
+    const ossResp = await fetch(ossUrl + `?uploadId=${pre.data!.upload_id}`, {
+      method: "POST",
+      headers: {
+        Authorization: authKey,
+        "Content-MD5": contentMd5,
+        "Content-Type": "application/xml",
+        Referer: "https://drive.uc.cn/",
+        "x-oss-callback": callbackBase64,
+        "x-oss-date": timeStr,
+        "x-oss-user-agent": OSS_USER_AGENT,
+      },
+      body: xml,
+    });
+
+    if (!ossResp.ok) {
+      const text = await ossResp.text();
+      throw new Error(`UC OSS commit failed: ${ossResp.status} ${text.slice(0, 200)}`);
+    }
+  }
+
+  private async upFinish(
+    pre: UcEnvelope<UcUpPreData> & { metadata?: UcUpPreMetadata },
+  ): Promise<void> {
+    await this.request<Record<string, never>>(
+      "POST",
+      "/1/clouddrive/file/upload/finish",
+      { searchParams: this.createBaseParams() },
+      { obj_key: pre.data!.obj_key, task_id: pre.data!.task_id },
+    );
+  }
+
+  private guessMimeType(fileName: string): string {
+    const ext = fileName.split(".").pop()?.toLowerCase() ?? "";
+    const mimeMap: Record<string, string> = {
+      pdf: "application/pdf",
+      zip: "application/zip",
+      rar: "application/x-rar-compressed",
+      "7z": "application/x-7z-compressed",
+      doc: "application/msword",
+      docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      xls: "application/vnd.ms-excel",
+      xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      ppt: "application/vnd.ms-powerpoint",
+      pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+      mp4: "video/mp4",
+      mkv: "video/x-matroska",
+      avi: "video/x-msvideo",
+      mp3: "audio/mpeg",
+      jpg: "image/jpeg",
+      jpeg: "image/jpeg",
+      png: "image/png",
+      gif: "image/gif",
+      txt: "text/plain",
+      exe: "application/x-msdownload",
+      dmg: "application/x-apple-diskimage",
+      iso: "application/x-iso9660-image",
+      apk: "application/vnd.android.package-archive",
+    };
+    return mimeMap[ext] ?? "application/octet-stream";
+  }
 
   async getShareTokenAndFiles(
     pwdId: string,

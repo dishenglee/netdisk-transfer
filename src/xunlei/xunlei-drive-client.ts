@@ -32,6 +32,7 @@ export interface XunleiCreatedShare {
 }
 
 export interface XunleiDriveClient {
+  getDownloadUrl(fileId: string): Promise<string>;
   getShareDetail(
     shareId: string,
     passCode: string,

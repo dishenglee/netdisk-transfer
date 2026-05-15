@@ -4,8 +4,8 @@ import QRCode from "qrcode";
 import { updateEnvValue } from "../quark/quark-cookie-login.js";
 
 const CLIENT_ID = "381";
-const TOKEN_URL = "https://uop.quark.cn/cas/ajax/getTokenForQrcodeLogin";
-const POLL_URL = "https://uop.quark.cn/cas/ajax/getServiceTicketByQrcodeToken";
+const TOKEN_URL = "https://api.open.uc.cn/cas/ajax/getTokenForQrcodeLogin";
+const POLL_URL = "https://api.open.uc.cn/cas/ajax/getServiceTicketByQrcodeToken";
 const EXCHANGE_URL = "https://drive.uc.cn/account/info";
 
 export interface UcQrLoginOptions {
@@ -107,7 +107,7 @@ async function getQrToken(): Promise<string> {
 }
 
 function buildQrUrl(token: string): string {
-  return `https://su.quark.cn/4_eMHBJ?token=${token}&client_id=${CLIENT_ID}&ssb=weblogin&uc_param_str=&uc_biz_str=S:custom|OPT:SAREA@0|OPT:IMMERSIVE@1|OPT:BACK_BTN_STYLE@0`;
+  return `https://su.uc.cn/1_n0ZCv?token=${token}&client_id=${CLIENT_ID}&uc_param_str=dsdnfrpfbivesscpgimibtbmnijblauputogpintnwktprchmt&uc_biz_str=S%3Acustom%7CC%3Atitlebar_fix`;
 }
 
 async function pollQrStatus(

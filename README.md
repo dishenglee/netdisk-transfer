@@ -115,23 +115,50 @@ console.log(result.targetShareUrl);
 | `NETDISK_TRANSFER_XUNLEI_ACCESS_TOKEN` | Access Token（自动刷新） | - |
 | `NETDISK_TRANSFER_XUNLEI_SHARE_EXPIRATION_DAYS` | 分享有效天数 (-1=永久) | `-1` |
 
-## Cookie / Token 获取
+## 登录获取 Cookie / Token
 
-### 浏览器获取 Cookie
+### 一键登录（推荐）
+
+内置纯 HTTP 登录工具，无需安装浏览器：
+
+```bash
+# 统一入口（交互式选择平台）
+npm run login
+
+# 指定平台
+npx tsx src/login.ts quark    # 夸克 - 终端扫码
+npx tsx src/login.ts baidu    # 百度 - 打开链接扫码
+npx tsx src/login.ts uc       # UC  - 终端扫码
+npx tsx src/login.ts xunlei   # 迅雷 - 账号密码
+```
+
+登录成功后自动将 Cookie / Token 写入 `.env` 文件。
+
+| 平台 | 登录方式 | 依赖 |
+|------|---------|------|
+| 夸克 | APP 扫码（终端显示二维码） | 无 |
+| 百度 | APP 扫码（浏览器打开图片） | 无 |
+| UC | APP 扫码（终端显示二维码） | 无 |
+| 迅雷 | 账号密码 | 无 |
+
+### 手动获取
+
+也可以手动从浏览器复制：
 
 1. 登录对应网盘网页版
 2. 打开浏览器开发者工具 (F12) -> Network 面板
-3. 刷新页面，找到任意请求，复制 `Cookie` 请求头的值
+3. 刷新页面，复制任意请求的 `Cookie` 请求头值
+4. 填入 `.env` 对应字段
 
-### 迅雷 Token
+### Playwright 登录（可选）
 
-迅雷使用 OAuth Token 认证，项目提供了 Playwright 辅助登录脚本，通过浏览器扫码登录后自动提取 Token：
+如果已安装 `playwright-core`，也可以使用浏览器扫码登录：
 
 ```bash
-npx tsx src/xunlei/xunlei-token-login.ts
+npx tsx src/quark/quark-cookie-login.ts   # 夸克
+npx tsx src/baidu/baidu-cookie-login.ts   # 百度
+npx tsx src/xunlei/xunlei-token-login.ts  # 迅雷
 ```
-
-需要安装 `playwright-core` 和对应浏览器。
 
 ## 开发
 

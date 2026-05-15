@@ -42,3 +42,27 @@ export {
   type NetdiskCookiePlatform,
   type NetdiskCookieValidationResult,
 } from "./netdisk-cookie-manager.js";
+
+export {
+  loginQuarkByQrCode,
+  type QuarkQrLoginOptions,
+  type QuarkQrLoginResult,
+} from "./quark/quark-qr-login.js";
+
+export {
+  loginBaiduByQrCode,
+  type BaiduQrLoginOptions,
+  type BaiduQrLoginResult,
+} from "./baidu/baidu-qr-login.js";
+
+export {
+  loginUcByQrCode,
+  type UcQrLoginOptions,
+  type UcQrLoginResult,
+} from "./uc/uc-qr-login.js";
+
+export {
+  loginXunleiByPassword,
+  type XunleiPasswordLoginOptions,
+  type XunleiPasswordLoginResult,
+} from "./xunlei/xunlei-password-login.js";

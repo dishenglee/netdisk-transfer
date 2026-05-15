@@ -9,6 +9,7 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsx src/cli.ts",
+    "login": "tsx src/login.ts",
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "eslint src/",
@@ -18,10 +19,12 @@
     "node": ">=20"
   },
   "dependencies": {
-    "dotenv": "^17.0.0"
+    "dotenv": "^17.0.0",
+    "qrcode": "^1.5.4"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
+    "@types/qrcode": "^1.5.6",
     "tsx": "^4.0.0",
     "typescript": "^5.6.0",
     "vitest": "^3.0.0"

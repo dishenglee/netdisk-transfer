@@ -3,7 +3,7 @@ import { createInterface } from "node:readline/promises";
 import { loginQuarkByQrCode } from "./quark/quark-qr-login.js";
 import { loginBaiduByQrCode } from "./baidu/baidu-qr-login.js";
 import { loginUcByQrCode } from "./uc/uc-qr-login.js";
-import { loginXunleiByPassword } from "./xunlei/xunlei-password-login.js";
+import { loginXunleiByQrCode } from "./xunlei/xunlei-qr-login.js";
 
 config();
 
@@ -11,7 +11,7 @@ const PLATFORMS = {
   quark: { name: "夸克网盘", method: "扫码" },
   baidu: { name: "百度网盘", method: "扫码" },
   uc: { name: "UC网盘", method: "扫码" },
-  xunlei: { name: "迅雷网盘", method: "账号密码" },
+  xunlei: { name: "迅雷网盘", method: "扫码" },
 } as const;
 
 type Platform = keyof typeof PLATFORMS;
@@ -64,7 +64,7 @@ async function main() {
         await loginUcByQrCode({ writeEnv: true });
         break;
       case "xunlei":
-        await loginXunleiByPassword({ writeEnv: true });
+        await loginXunleiByQrCode({ writeEnv: true });
         break;
     }
     console.log("\nCookie/Token 已保存到 .env 文件");

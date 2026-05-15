@@ -129,7 +129,7 @@ npm run login
 npx tsx src/login.ts quark    # 夸克 - 终端扫码
 npx tsx src/login.ts baidu    # 百度 - 打开链接扫码
 npx tsx src/login.ts uc       # UC  - 终端扫码
-npx tsx src/login.ts xunlei   # 迅雷 - 账号密码
+npx tsx src/login.ts xunlei   # 迅雷 - 终端扫码
 ```
 
 登录成功后自动将 Cookie / Token 写入 `.env` 文件。
@@ -139,7 +139,7 @@ npx tsx src/login.ts xunlei   # 迅雷 - 账号密码
 | 夸克 | APP 扫码（终端显示二维码） | 无 |
 | 百度 | APP 扫码（浏览器打开图片） | 无 |
 | UC | APP 扫码（终端显示二维码） | 无 |
-| 迅雷 | 账号密码 | 无 |
+| 迅雷 | APP 扫码（终端显示二维码） | 无 |
 
 ### 手动获取
 

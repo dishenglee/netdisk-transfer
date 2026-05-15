@@ -1,11 +1,20 @@
 import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import QRCode from "qrcode";
+import { PNG } from "pngjs";
+import jsQRModule from "jsqr";
+
+const jsQR = (jsQRModule as any).default ?? jsQRModule;
 import { updateEnvValue } from "../quark/quark-cookie-login.js";
 
 const QRCODE_URL = "https://passport.baidu.com/v2/api/getqrcode";
+const QRCODE_IMAGE_URL = "https://passport.baidu.com/v2/api/qrcode";
 const UNICAST_URL = "https://passport.baidu.com/channel/unicast";
-const BDUSS_LOGIN_URL = "https://passport.baidu.com/v3/login/main/qrbdusslogin";
+const BDUSS_LOGIN_URL =
+  "https://passport.baidu.com/v3/login/main/qrbdusslogin";
 const PAN_URL = "https://pan.baidu.com/disk/main";
+const UA =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 
 export interface BaiduQrLoginOptions {
   writeEnv?: boolean;
@@ -21,14 +30,14 @@ export interface BaiduQrLoginResult {
   wroteEnv: boolean;
 }
 
-interface QrcodeResponse {
+interface QrcodeApiResponse {
   errno?: number;
   imgurl?: string;
   sign?: string;
   channel_id?: string;
 }
 
-interface UnicastResponse {
+interface UnicastApiResponse {
   errno?: number;
   channel_v?: string;
 }
@@ -43,11 +52,14 @@ export async function loginBaiduByQrCode(
   const cookies = new Map<string, string>();
 
   const qr = await getQrCode(gid, cookies);
-  const qrImageUrl = `https://passport.baidu.com/v2/api/qrcode?sign=${encodeURIComponent(qr.sign)}&lp=pc`;
-  log(`百度网盘扫码登录`);
-  log(`请在浏览器打开以下链接查看二维码，然后用百度网盘APP扫码：`);
-  log(`  ${qrImageUrl}`);
-  log(`\n等待扫码中...`);
+  const qrContent = await decodeQrImage(qr.imgurl);
+
+  const qrText = await QRCode.toString(qrContent, {
+    type: "terminal",
+    small: true,
+  });
+  log(qrText);
+  log("请使用百度网盘APP扫描上方二维码登录");
 
   const startedAt = Date.now();
   let bdussValue: string | undefined;
@@ -94,7 +106,7 @@ export async function loginBaiduByQrCode(
 async function getQrCode(
   gid: string,
   cookies: Map<string, string>,
-): Promise<{ sign: string; channelId: string }> {
+): Promise<{ imgurl: string; channelId: string }> {
   const url = new URL(QRCODE_URL);
   url.searchParams.set("lp", "pc");
   url.searchParams.set("qrloginfrom", "pc");
@@ -103,22 +115,45 @@ async function getQrCode(
   url.searchParams.set("tt", String(Date.now()));
   url.searchParams.set("tpl", "netdisk");
 
-  const resp = await fetch(url, {
+  const resp: Response = await fetch(url, {
     redirect: "manual",
     headers: { "user-agent": UA },
   });
   collectCookies(resp, cookies);
 
   const text = await resp.text();
-  const json = parseJsonpOrJson(text) as QrcodeResponse;
+  const json = parseJsonpOrJson(text) as QrcodeApiResponse;
 
-  const sign = json.imgurl ?? json.sign;
-  const channelId = json.channel_id ?? json.sign ?? sign;
-  if (!sign || !channelId) {
+  const imgurl = json.imgurl;
+  const channelId = json.channel_id ?? json.sign;
+  if (!imgurl || !channelId) {
     throw new Error(`获取百度二维码失败: ${JSON.stringify(json)}`);
   }
 
-  return { sign, channelId };
+  return { imgurl, channelId };
+}
+
+async function decodeQrImage(imgurl: string): Promise<string> {
+  const imageUrl = `${QRCODE_IMAGE_URL}?sign=${encodeURIComponent(imgurl)}&lp=pc`;
+  const resp = await fetch(imageUrl, { headers: { "user-agent": UA } });
+
+  if (!resp.ok) {
+    throw new Error(`下载百度二维码图片失败: ${resp.status}`);
+  }
+
+  const buffer = Buffer.from(await resp.arrayBuffer());
+  const png = PNG.sync.read(buffer);
+  const code = jsQR(
+    new Uint8ClampedArray(png.data),
+    png.width,
+    png.height,
+  );
+
+  if (!code?.data) {
+    throw new Error("无法解码百度二维码图片");
+  }
+
+  return code.data;
 }
 
 async function pollUnicast(
@@ -138,7 +173,7 @@ async function pollUnicast(
   const timeout = setTimeout(() => controller.abort(), 35_000);
 
   try {
-    const resp = await fetch(url, {
+    const resp: Response = await fetch(url, {
       redirect: "manual",
       headers: {
         "user-agent": UA,
@@ -149,10 +184,13 @@ async function pollUnicast(
     collectCookies(resp, cookies);
 
     const text = await resp.text();
-    const json = parseJsonpOrJson(text) as UnicastResponse;
+    const json = parseJsonpOrJson(text) as UnicastApiResponse;
 
     if (json.errno === 0 && json.channel_v) {
-      const inner = parseJsonpOrJson(json.channel_v) as { status?: number; v?: string };
+      const inner = parseJsonpOrJson(json.channel_v) as {
+        status?: number;
+        v?: string;
+      };
       if (inner.status === 0 && inner.v) {
         return { v: inner.v };
       }
@@ -197,7 +235,7 @@ async function visitPanPage(cookies: Map<string, string>): Promise<void> {
     '["bdstoken","token","uk","isdocuser","servertime"]',
   );
 
-  const resp = await fetch(url, {
+  const resp: Response = await fetch(url, {
     headers: {
       "user-agent": UA,
       cookie: formatCookieString(cookies),
@@ -232,11 +270,11 @@ async function followRedirects(
   }
 }
 
-function parseJsonpOrJson(text: string): Record<string, any> {
+function parseJsonpOrJson(text: string): Record<string, unknown> {
   const trimmed = text.trim();
   const match = trimmed.match(/^\w+\((.*)\);?$/s);
   try {
-    return JSON.parse(match ? match[1] : trimmed);
+    return JSON.parse(match ? match[1] : trimmed) as Record<string, unknown>;
   } catch {
     return {};
   }
@@ -246,7 +284,7 @@ function collectCookies(resp: Response, jar: Map<string, string>): void {
   const raw =
     typeof (resp.headers as any).getSetCookie === "function"
       ? (resp.headers as any).getSetCookie()
-      : resp.headers.get("set-cookie")?.split(/,(?=\s*\w+=)/) ?? [];
+      : (resp.headers.get("set-cookie")?.split(/,(?=\s*\w+=)/) ?? []);
 
   for (const header of raw as string[]) {
     const nameValue = header.split(";")[0];
@@ -266,9 +304,6 @@ function formatCookieString(cookies: Map<string, string>): string {
     .map(([name, value]) => `${name}=${value}`)
     .join("; ");
 }
-
-const UA =
-  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 
 const sleep = (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));

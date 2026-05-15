@@ -62,6 +62,12 @@ export {
 } from "./uc/uc-qr-login.js";
 
 export {
+  loginXunleiByQrCode,
+  type XunleiQrLoginOptions,
+  type XunleiQrLoginResult,
+} from "./xunlei/xunlei-qr-login.js";
+
+export {
   loginXunleiByPassword,
   type XunleiPasswordLoginOptions,
   type XunleiPasswordLoginResult,
